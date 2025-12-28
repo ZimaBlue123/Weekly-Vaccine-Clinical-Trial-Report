@@ -1,0 +1,5 @@
+{
+  "name": "Copy of VaccineWeekly - Clinical Trial Reporter",
+  "description": "Automated AI agent that monitors global vaccine clinical trials, generates weekly reports, and pushes them to Enterprise WeChat (WeCom). Features scheduled execution and search grounding.",
+  "requestFramePermissions": []
+}
