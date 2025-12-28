@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { BotStatus, LogEntry, AppConfig } from './types';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { BotStatus, LogEntry } from './types';
 import { generateWeeklyReport } from './services/geminiService';
 import { sendToWeCom } from './services/wecomService';
 import { WECOM_WEBHOOK_DEFAULT } from './constants';
@@ -20,6 +20,10 @@ const App: React.FC = () => {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [lastReport, setLastReport] = useState<string>('');
   const [countDown, setCountDown] = useState<string>('--:--:--');
+  
+  // Robust Scheduling Refs
+  // We use a ref to track the last run date to avoid stale closures in setInterval
+  const lastRunDateRef = useRef<string>('');
 
   // Logger
   const addLog = useCallback((message: string, type: LogEntry['type'] = 'info') => {
@@ -37,6 +41,9 @@ const App: React.FC = () => {
 
     if (!apiKey) {
       addLog("API Key missing. Cannot execute workflow.", 'error');
+      setStatus(BotStatus.ERROR);
+      // Auto-reset error state so scheduler can try again next week if key is fixed
+      setTimeout(() => setStatus(BotStatus.WAITING), 10000); 
       return;
     }
 
@@ -63,12 +70,14 @@ const App: React.FC = () => {
       setStatus(BotStatus.COMPLETED);
       addLog("Workflow complete. Waiting for next schedule.", 'success');
 
-      // Reset to waiting after a delay
-      setTimeout(() => setStatus(BotStatus.WAITING), 5000);
+      // Reset to waiting after a delay to be ready for next cycle
+      setTimeout(() => setStatus(BotStatus.WAITING), 60000);
 
     } catch (error: any) {
       setStatus(BotStatus.ERROR);
       addLog(`Error: ${error.message}`, 'error');
+      // Auto-recover after 1 minute to ensure system doesn't get stuck in ERROR state forever
+      setTimeout(() => setStatus(BotStatus.WAITING), 60000); 
     }
   }, [apiKey, webhookUrl, status, addLog]);
 
@@ -79,20 +88,41 @@ const App: React.FC = () => {
       const day = now.getDay(); // 5 is Friday
       const hour = now.getHours();
       const minute = now.getMinutes();
-      const second = now.getSeconds();
+      
+      // Date Key to ensure we only run once per day
+      const dateKey = now.toLocaleDateString('en-GB');
 
       // Countdown / Status logic for UI
       const isFriday = day === 5;
-      const isTime = hour === 16 && minute === 30;
+      const isTimeWindow = hour === 16 && minute === 30; // 16:30:00 to 16:30:59
       
       let nextRunText = "Next run: Friday 16:30";
-      if (isFriday && hour < 16) nextRunText = `Today at 16:30`;
-      if (isFriday && hour === 16 && minute < 30) nextRunText = `Starts in ${30 - minute} mins`;
+      if (isFriday) {
+          if (hour < 16 || (hour === 16 && minute < 30)) {
+             const diffMins = (16 * 60 + 30) - (hour * 60 + minute);
+             nextRunText = diffMins < 60 ? `Starts in ${diffMins} mins` : "Today at 16:30";
+          } else if (hour > 16 || (hour === 16 && minute > 30)) {
+             nextRunText = "Next run: Next Friday";
+          } else {
+             nextRunText = "Running Scheduled Task...";
+          }
+      }
       setCountDown(nextRunText);
 
       // Trigger Logic
-      if (autoMode && isFriday && isTime && second === 0 && status === BotStatus.WAITING) {
-        addLog("Auto-Scheduler triggered.", 'warning');
+      // 1. Must be Auto Mode
+      // 2. Must be Friday 16:30
+      // 3. Must NOT have run today already (checked via Ref)
+      // 4. Status must be WAITING (idle)
+      if (
+        autoMode && 
+        isFriday && 
+        isTimeWindow && 
+        lastRunDateRef.current !== dateKey && 
+        status === BotStatus.WAITING
+      ) {
+        addLog(`Auto-Scheduler triggered for ${dateKey}`, 'warning');
+        lastRunDateRef.current = dateKey; // Mark as run immediately
         executeWorkflow();
       }
     }, 1000);
@@ -110,17 +140,29 @@ const App: React.FC = () => {
       <div className="max-w-4xl mx-auto">
         
         {/* Header */}
-        <header className="mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-bold text-slate-800 tracking-tight">
-              Vaccine<span className="text-blue-600">Weekly</span>
-            </h1>
-            <p className="text-slate-500 mt-1">Automated Clinical Trial Intelligence & Reporting</p>
+        <header className="mb-8">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+              <h1 className="text-3xl font-bold text-slate-800 tracking-tight">
+                Vaccine<span className="text-blue-600">Weekly</span>
+              </h1>
+              <p className="text-slate-500 mt-1">Automated Clinical Trial Intelligence & Reporting</p>
+            </div>
+            <div className="flex items-center gap-3 bg-white px-4 py-2 rounded-lg border border-slate-200 shadow-sm">
+              <div className={`w-3 h-3 rounded-full ${autoMode ? 'bg-green-500 animate-pulse' : 'bg-slate-300'}`}></div>
+              <div className="text-sm font-medium text-slate-600">
+                {autoMode ? 'Auto-Pilot Active' : 'Manual Mode'}
+              </div>
+            </div>
           </div>
-          <div className="flex items-center gap-3 bg-white px-4 py-2 rounded-lg border border-slate-200 shadow-sm">
-            <div className={`w-3 h-3 rounded-full ${autoMode ? 'bg-green-500 animate-pulse' : 'bg-slate-300'}`}></div>
-            <div className="text-sm font-medium text-slate-600">
-              {autoMode ? 'Auto-Pilot Active' : 'Manual Mode'}
+          {/* Production Warning */}
+          <div className="mt-4 bg-amber-50 border border-amber-200 rounded-md p-3 flex items-start gap-2">
+            <svg className="w-5 h-5 text-amber-500 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+            <div className="text-sm text-amber-800">
+              <strong>Keep this tab open.</strong> The scheduler relies on the browser being active. 
+              Running strictly at <strong>16:30 on Fridays</strong>.
             </div>
           </div>
         </header>
@@ -182,11 +224,15 @@ const App: React.FC = () => {
                       : 'bg-slate-300 cursor-not-allowed'}
                   `}
                 >
-                  {status === BotStatus.SEARCHING ? 'Processing...' : 'Run Now'}
+                  {status === BotStatus.SEARCHING ? 'Processing...' : 'Run Now (Manual)'}
                 </button>
                 <button
                   onClick={() => setAutoMode(!autoMode)}
-                  className="px-6 py-2 rounded-lg font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 transition-colors"
+                  className={`px-6 py-2 rounded-lg font-medium border transition-colors
+                    ${autoMode 
+                      ? 'text-slate-700 bg-slate-100 hover:bg-slate-200 border-slate-200' 
+                      : 'text-red-700 bg-red-50 hover:bg-red-100 border-red-200'
+                    }`}
                 >
                   {autoMode ? 'Disable Timer' : 'Enable Timer'}
                 </button>
@@ -194,10 +240,12 @@ const App: React.FC = () => {
           </div>
 
           {/* Quick Stats / Info */}
-          <div className="bg-gradient-to-br from-indigo-600 to-blue-700 p-6 rounded-xl shadow-md text-white">
-             <div className="text-indigo-100 text-sm font-medium mb-2">Schedule Target</div>
-             <div className="text-4xl font-bold mb-1">Friday</div>
-             <div className="text-2xl opacity-90">16:30 PM</div>
+          <div className="bg-gradient-to-br from-indigo-600 to-blue-700 p-6 rounded-xl shadow-md text-white flex flex-col justify-between">
+             <div>
+               <div className="text-indigo-100 text-sm font-medium mb-2">Next Scheduled Run</div>
+               <div className="text-4xl font-bold mb-1">Friday</div>
+               <div className="text-2xl opacity-90">16:30 PM</div>
+             </div>
              <div className="mt-4 pt-4 border-t border-white/20 text-xs text-indigo-200">
                Targeting China & Global Databases (NMPA, FDA, WHO)
              </div>

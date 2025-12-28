@@ -7,9 +7,15 @@ export const generateWeeklyReport = async (apiKey: string): Promise<string> => {
   const ai = new GoogleGenAI({ apiKey });
 
   try {
-    // Inject dynamic date
-    const today = new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' });
-    const prompt = REPORT_PROMPT_TEMPLATE.replace(/{{CURRENT_DATE}}/g, today);
+    const now = new Date();
+    // Format: 2025-05-23
+    const dateStr = now.toLocaleDateString('zh-CN', { year: 'numeric', month: 'numeric', day: 'numeric' });
+    // Format: 2025年5月23日
+    const dateStrZH = now.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' });
+
+    const prompt = REPORT_PROMPT_TEMPLATE
+      .replace(/{{CURRENT_DATE}}/g, dateStr)
+      .replace(/{{CURRENT_DATE_ZH}}/g, dateStrZH);
 
     // Use gemini-2.5-flash for efficiency and search capabilities
     const model = 'gemini-2.5-flash';
@@ -32,9 +38,6 @@ export const generateWeeklyReport = async (apiKey: string): Promise<string> => {
     if (!text) {
       throw new Error("Empty response from AI model");
     }
-
-    // Double check to ensure sources are mentioned or relevant
-    // (Optional validation logic could go here)
 
     return text;
 
